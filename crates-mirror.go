@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"database/sql"
-	_ "github.com/mattn/go-sqlite3"
+	"encoding/json"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 var dl = "https://crates.io/api/v1/crates/{name}/{version}/download"
@@ -29,6 +32,13 @@ create table update_history (
     commit_id text,
     timestamp text
 );`
+
+type Crate struct {
+	Name   string `json:"name"`
+	Vers   string `json:"vers"`
+	Cksum  string `json:"cksum"`
+	Yanked bool   `json:"yanked"`
+}
 
 func initialize_db(dbpath string) (*sql.DB, error) {
 	var db *sql.DB
@@ -52,17 +62,23 @@ const insertUpdateHistoryStmt = "insert into update_history values(?, ?)"
 
 func initializeRepo(db *sql.DB, registrypath string) error {
 	if _, err := os.Stat(registrypath); os.IsNotExist(err) {
+		log.Println("EMIL")
 		output, err := exec.Command("git", "clone", index_url).Output()
 		if err != nil {
+			log.Println(output)
 			return err
 		}
-		log.Println(output)
 	}
 	err := os.Chdir(registrypath)
 	if err != nil {
 		return err
 	}
-	output, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	output, err := exec.Command("git", "pull").Output()
+	if err != nil {
+		log.Println(output)
+		return err
+	}
+	output, err = exec.Command("git", "rev-parse", "HEAD").Output()
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -78,24 +94,77 @@ func initializeRepo(db *sql.DB, registrypath string) error {
 	return nil
 }
 
+func loadInfo(db *sql.DB, registrypath, ignore string) error {
+	result, err := db.Query("select count(id) from crate")
+	var count int
+	result.Next()
+	err = result.Scan(&count)
+	if err != nil {
+		return err
+	}
+	log.Println("Found", count, "rows")
+	result.Close()
+	if count != 0 { // info already loaded
+		return nil
+	}
+	return filepath.Walk(registrypath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		log.Println(path)
+		if path == ignore {
+			return filepath.SkipDir
+		}
+		if info.Name() == "config.json" {
+			return nil
+		}
+		if !info.IsDir() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			scanner := bufio.NewScanner(f)
+			for scanner.Scan() {
+				var crate Crate
+				log.Println(scanner.Text())
+				json.Unmarshal(scanner.Bytes(), &crate)
+				log.Println("CRATE", crate)
+				_, err := db.Exec("insert into crate (name, version, checksum, yanked) values (?, ?, ?, ?)", crate.Name, crate.Vers, crate.Cksum, crate.Yanked)
+				if err != nil {
+					return err
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func main() {
 
+	log.SetFlags(log.Flags() | log.Llongfile)
 	var work_dir, err = os.Getwd()
 	if err != nil {
 		log.Fatal(err)
 	}
-	var registry_path = filepath.Join(work_dir, "crates.io-index")
+	var registrypath = filepath.Join(work_dir, "crates.io-index")
 	//var crates_path = filepath.Join(work_dir, "crates")
-	//var ignore = filepath.Join(registry_path, ".git")
+	var ignore = filepath.Join(registrypath, ".git")
 	var db_path = filepath.Join(work_dir, "crates.db")
 
 	db, err := initialize_db(db_path)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	err = initializeRepo(db, registry_path)
+	err = initializeRepo(db, registrypath)
 	if err != nil {
 		log.Fatal(err)
 	}
+	err = loadInfo(db, registrypath, ignore)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 }
