@@ -62,7 +62,6 @@ const insertUpdateHistoryStmt = "insert into update_history values(?, ?)"
 
 func initializeRepo(db *sql.DB, registrypath string) error {
 	if _, err := os.Stat(registrypath); os.IsNotExist(err) {
-		log.Println("EMIL")
 		output, err := exec.Command("git", "clone", index_url).Output()
 		if err != nil {
 			log.Println(output)
@@ -111,7 +110,6 @@ func loadInfo(db *sql.DB, registrypath, ignore string) error {
 		if err != nil {
 			return err
 		}
-		log.Println(path)
 		if path == ignore {
 			return filepath.SkipDir
 		}
@@ -126,9 +124,7 @@ func loadInfo(db *sql.DB, registrypath, ignore string) error {
 			scanner := bufio.NewScanner(f)
 			for scanner.Scan() {
 				var crate Crate
-				log.Println(scanner.Text())
 				json.Unmarshal(scanner.Bytes(), &crate)
-				log.Println("CRATE", crate)
 				_, err := db.Exec("insert into crate (name, version, checksum, yanked) values (?, ?, ?, ?)", crate.Name, crate.Vers, crate.Cksum, crate.Yanked)
 				if err != nil {
 					return err
