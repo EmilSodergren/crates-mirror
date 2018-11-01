@@ -3,10 +3,11 @@ package main
 import (
 	"database/sql"
 	_ "github.com/mattn/go-sqlite3"
-	"os"
-	"path/filepath"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"time"
 )
 
 var dl = "https://crates.io/api/v1/crates/{name}/{version}/download"
@@ -55,10 +56,26 @@ func initializeRepo(db *sql.DB, registrypath string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(output)
+		log.Println(output)
 	}
-	sql.Exec(
+	err := os.Chdir(registrypath)
+	if err != nil {
+		return err
+	}
+	output, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(insertUpdateHistoryStmt)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	stmt.Exec(string(output), time.Now())
+	tx.Commit()
 
+	return nil
 }
 
 func main() {
@@ -67,12 +84,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	//var registry_path = filepath.Join(work_dir, "crates.io-index")
+	var registry_path = filepath.Join(work_dir, "crates.io-index")
 	//var crates_path = filepath.Join(work_dir, "crates")
 	//var ignore = filepath.Join(registry_path, ".git")
 	var db_path = filepath.Join(work_dir, "crates.db")
 
-	_, err = initialize_db(db_path)
+	db, err := initialize_db(db_path)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = initializeRepo(db, registry_path)
 	if err != nil {
 		log.Fatal(err)
 	}
