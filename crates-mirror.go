@@ -21,8 +21,6 @@ import (
 )
 
 // variables are "name" and "version"
-var dl = "https://crates.io/api/v1/crates/%s/%s/download"
-
 const index_url = "https://github.com/rust-lang/crates.io-index"
 
 const max_connection = 10
@@ -149,11 +147,11 @@ func createDirectory(name, cratespath string) string {
 	return directory
 }
 
-func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan chan<- struct{}, cratesdirpath string) {
+func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan chan<- struct{}, cratesdirpath, dlApi string) {
 	for crate := range crateChan {
 		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
 		directory := createDirectory(crate.Name, cratesdirpath)
-		req := fmt.Sprintf(dl, crate.Name, crate.Vers)
+		req := fmt.Sprintf("%s/%s/%s/download", dlApi, crate.Name, crate.Vers)
 		resp, err := http.Get(req)
 		if err != nil {
 			log.Println(err)
@@ -186,7 +184,8 @@ func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan ch
 			out.Close()
 			returnCrate <- crate
 		} else {
-			log.Printf("Hash mismatch for file %s. Got %s, Expected %s\n", crate.Name, fmt.Sprintf("%x", hash.Sum(nil)), crate.Cksum)
+			log.Printf("Hash mismatch for crate %s-%s. Got %s, Expected %s\n", crate.Name, crate.Vers, fmt.Sprintf("%x", hash.Sum(nil)), crate.Cksum)
+			log.Println("The response was", string(responseData.Bytes()))
 		}
 	}
 	doneChan <- struct{}{}
@@ -195,14 +194,14 @@ func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan ch
 
 var updateStmt = "update crate set downloaded = ?, size = ?,  last_update = ? where name = ? and version = ?"
 
-func retrieveCrates(db *sql.DB, cratespath string) error {
+func retrieveCrates(db *sql.DB, cratespath, dlApi string) error {
 	var crateChan = make(chan Crate)
 	var returnCrate = make(chan Crate)
 	var doneChan = make(chan struct{})
 	workers := 2 * runtime.NumCPU()
 
 	for i := 0; i < workers; i++ {
-		go downloadCrate(crateChan, returnCrate, doneChan, cratespath)
+		go downloadCrate(crateChan, returnCrate, doneChan, cratespath, dlApi)
 	}
 	go func() {
 		for crate := range returnCrate {
@@ -262,6 +261,28 @@ func handleArgs() (*Config, error) {
 	return config, nil
 }
 
+type IndexApi struct {
+	Dl  string `json:"dl"`
+	Api string `json:"api"`
+}
+
+func readApi(registrypath string) (*IndexApi, error) {
+	apiConfig := filepath.Join(registrypath, "config.json")
+	if _, err := os.Stat(apiConfig); os.IsNotExist(err) {
+		return nil, err
+	}
+	var indexApi = new(IndexApi)
+	configcontent, err := ioutil.ReadFile(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(configcontent, indexApi)
+	if err != nil {
+		return nil, err
+	}
+	return indexApi, nil
+}
+
 func run(config *Config) error {
 
 	var ignore = filepath.Join(config.RegistryPath, ".git")
@@ -270,15 +291,19 @@ func run(config *Config) error {
 	if err != nil {
 		return err
 	}
-	err = initializeRepo(db, config.RegistryPath)
-	if err != nil {
-		return err
-	}
+	//err = initializeRepo(db, config.RegistryPath)
+	//if err != nil {
+	//return err
+	//}
 	err = loadInfo(db, config.RegistryPath, ignore)
 	if err != nil {
 		return err
 	}
-	err = retrieveCrates(db, config.CratesPath)
+	indexApi, err := readApi(config.RegistryPath)
+	if err != nil {
+		return err
+	}
+	err = retrieveCrates(db, config.CratesPath, indexApi.Dl)
 	if err != nil {
 		return err
 	}
