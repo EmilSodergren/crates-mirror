@@ -3,3 +3,4 @@ crates.db
 env/
 crates/
 crates.io-index/
+config.json
