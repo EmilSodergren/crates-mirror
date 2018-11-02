@@ -235,31 +235,43 @@ func retrieveCrates(db *sql.DB, cratespath string) error {
 	return nil
 }
 
+type Config struct {
+	CratesPath   string `json:"cratespath"`
+	RegistryPath string `json:"registrypath"`
+	DbPath       string `json:"dbpath"`
+}
+
 func main() {
 
 	log.SetFlags(log.Flags() | log.Llongfile)
-	var work_dir, err = os.Getwd()
+	var configjson string
+	if len(os.Args) < 2 {
+		fmt.Println("No configfile provided. Using config.json")
+		configjson = "config.json"
+	} else {
+		configjson = os.Args[1]
+	}
+	var config Config
+	configcontent, err := ioutil.ReadFile(configjson)
 	if err != nil {
 		log.Fatal(err)
 	}
-	var registrypath = filepath.Join(work_dir, "crates.io-index")
-	var cratespath = filepath.Join(work_dir, "crates")
-	var ignore = filepath.Join(registrypath, ".git")
-	var db_path = filepath.Join(work_dir, "crates.db")
+	json.Unmarshal(configcontent, &config)
+	var ignore = filepath.Join(config.RegistryPath, ".git")
 
-	db, err := initialize_db(db_path)
+	db, err := initialize_db(config.DbPath)
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = initializeRepo(db, registrypath)
+	err = initializeRepo(db, config.RegistryPath)
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = loadInfo(db, registrypath, ignore)
+	err = loadInfo(db, config.RegistryPath, ignore)
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = retrieveCrates(db, cratespath)
+	err = retrieveCrates(db, config.CratesPath)
 	if err != nil {
 		log.Fatal(err)
 	}
