@@ -4,16 +4,21 @@ import (
 	"bufio"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var dl = "https://crates.io/api/v1/crates/{name}/{version}/download"
+// variables are "name" and "version"
+var dl = "https://crates.io/api/v1/crates/%s/%s/download"
 
 const max_connection = 10
 const index_url = "https://github.com/rust-lang/crates.io-index"
@@ -101,7 +106,6 @@ func loadInfo(db *sql.DB, registrypath, ignore string) error {
 	if err != nil {
 		return err
 	}
-	log.Println("Found", count, "rows")
 	if count != 0 { // info already loaded
 		return nil
 	}
@@ -137,6 +141,61 @@ func loadInfo(db *sql.DB, registrypath, ignore string) error {
 	})
 }
 
+func createDirectory(name, cratespath string) string {
+	var directory string
+	if len(name) == 1 {
+		directory = filepath.Join(cratespath, "1", name)
+	} else if len(name) == 2 {
+		directory = filepath.Join(cratespath, "2", name)
+	} else if len(name) == 3 {
+		directory = filepath.Join(cratespath, "3", name[:1], name)
+	} else {
+		directory = filepath.Join(cratespath, name[:2], name[2:4], name)
+	}
+	os.MkdirAll(directory, 0755)
+	return directory
+}
+
+func downloadCrate(crateChan <-chan Crate, cratespath string) error {
+	for crate := range crateChan {
+		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
+		directory := createDirectory(crate.Name, cratespath)
+		resp, err := http.Get(fmt.Sprintf(dl, crate.Name, crate.Vers))
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		out, err := os.Create(filepath.Join(directory, filename))
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		fmt.Println("Writing", filename)
+		io.Copy(out, resp.Body)
+	}
+	return nil
+}
+
+func retrieveCrates(db *sql.DB, cratespath string) error {
+	var crateChan = make(chan Crate)
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go downloadCrate(crateChan, cratespath)
+	}
+	notDownloaded, err := db.Query("select name, version, checksum, yanked from crate where downloaded = 0")
+	if err != nil {
+		return err
+	}
+	for notDownloaded.Next() {
+		var crate Crate
+		err := notDownloaded.Scan(&crate.Name, &crate.Vers, &crate.Cksum, &crate.Yanked)
+		if err != nil {
+			return err
+		}
+		crateChan <- crate
+	}
+	return nil
+}
+
 func main() {
 
 	log.SetFlags(log.Flags() | log.Llongfile)
@@ -145,7 +204,7 @@ func main() {
 		log.Fatal(err)
 	}
 	var registrypath = filepath.Join(work_dir, "crates.io-index")
-	//var crates_path = filepath.Join(work_dir, "crates")
+	var cratespath = filepath.Join(work_dir, "crates")
 	var ignore = filepath.Join(registrypath, ".git")
 	var db_path = filepath.Join(work_dir, "crates.db")
 
@@ -161,5 +220,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
+	err = retrieveCrates(db, cratespath)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
