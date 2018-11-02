@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -22,8 +23,9 @@ import (
 // variables are "name" and "version"
 var dl = "https://crates.io/api/v1/crates/%s/%s/download"
 
-const max_connection = 10
 const index_url = "https://github.com/rust-lang/crates.io-index"
+
+const max_connection = 10
 
 const initStmt = `create table crate (
     id integer primary key,
@@ -72,9 +74,9 @@ const insertUpdateHistoryStmt = "insert into update_history values(?, ?)"
 
 func initializeRepo(db *sql.DB, registrypath string) error {
 	if _, err := os.Stat(registrypath); os.IsNotExist(err) {
-		output, err := exec.Command("git", "clone", index_url).Output()
+		os.Chdir(filepath.Dir(registrypath))
+		_, err := exec.Command("git", "clone", index_url, filepath.Base(registrypath)).Output()
 		if err != nil {
-			log.Println(output)
 			return err
 		}
 	}
@@ -84,23 +86,11 @@ func initializeRepo(db *sql.DB, registrypath string) error {
 	}
 	output, err := exec.Command("git", "pull").Output()
 	if err != nil {
-		log.Println(output)
 		return err
 	}
 	output, err = exec.Command("git", "rev-parse", "HEAD").Output()
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.Prepare(insertUpdateHistoryStmt)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	stmt.Exec(string(output), time.Now())
-	tx.Commit()
-
-	return nil
+	_, err = db.Exec(insertUpdateHistoryStmt, string(output), time.Now())
+	return err
 }
 
 func loadInfo(db *sql.DB, registrypath, ignore string) error {
@@ -163,9 +153,14 @@ func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan ch
 	for crate := range crateChan {
 		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
 		directory := createDirectory(crate.Name, cratesdirpath)
-		resp, err := http.Get(fmt.Sprintf(dl, crate.Name, crate.Vers))
+		req := fmt.Sprintf(dl, crate.Name, crate.Vers)
+		resp, err := http.Get(req)
 		if err != nil {
 			log.Println(err)
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			log.Println(req, ": ", resp.Status)
 			continue
 		}
 		cratefilepath := filepath.Join(directory, filename)
@@ -191,7 +186,7 @@ func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan ch
 			out.Close()
 			returnCrate <- crate
 		} else {
-			log.Println("Hash mismatch for file", crate.Name)
+			log.Printf("Hash mismatch for file %s. Got %s, Expected %s\n", crate.Name, fmt.Sprintf("%x", hash.Sum(nil)), crate.Cksum)
 		}
 	}
 	doneChan <- struct{}{}
