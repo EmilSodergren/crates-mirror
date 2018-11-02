@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -42,7 +44,8 @@ type Crate struct {
 	Name   string `json:"name"`
 	Vers   string `json:"vers"`
 	Cksum  string `json:"cksum"`
-	Yanked bool   `json:"yanked"`
+	Size   int64
+	Yanked bool `json:"yanked"`
 }
 
 func initialize_db(dbpath string) (*sql.DB, error) {
@@ -52,7 +55,7 @@ func initialize_db(dbpath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(2)
 	db.Exec("PRAGMA journal_mode=WAL")
 
 	if os.IsNotExist(dbExistError) {
@@ -156,43 +159,84 @@ func createDirectory(name, cratespath string) string {
 	return directory
 }
 
-func downloadCrate(crateChan <-chan Crate, cratespath string) error {
+func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan chan<- struct{}, cratesdirpath string) {
 	for crate := range crateChan {
 		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
-		directory := createDirectory(crate.Name, cratespath)
+		directory := createDirectory(crate.Name, cratesdirpath)
 		resp, err := http.Get(fmt.Sprintf(dl, crate.Name, crate.Vers))
 		if err != nil {
-			return err
+			log.Println(err)
+			continue
 		}
-		defer resp.Body.Close()
-		out, err := os.Create(filepath.Join(directory, filename))
+		cratefilepath := filepath.Join(directory, filename)
 		if err != nil {
-			return err
+			log.Println(err)
+			continue
 		}
-		defer out.Close()
-		fmt.Println("Writing", filename)
-		io.Copy(out, resp.Body)
+		var responseData = new(bytes.Buffer)
+		io.Copy(responseData, resp.Body)
+		resp.Body.Close()
+		hash := sha256.New()
+		hash.Write(responseData.Bytes())
+		if fmt.Sprintf("%x", hash.Sum(nil)) == crate.Cksum {
+			out, err := os.Create(cratefilepath)
+			if err != nil {
+				log.Println(err)
+			}
+			fmt.Println("Downloaded", filename)
+			crate.Size, err = io.Copy(out, responseData)
+			if err != nil {
+				log.Println(err)
+			}
+			out.Close()
+			returnCrate <- crate
+		} else {
+			log.Println("Hash mismatch for file", crate.Name)
+		}
 	}
-	return nil
+	doneChan <- struct{}{}
+
 }
+
+var updateStmt = "update crate set downloaded = ?, size = ?,  last_update = ? where name = ? and version = ?"
 
 func retrieveCrates(db *sql.DB, cratespath string) error {
 	var crateChan = make(chan Crate)
-	for i := 0; i < runtime.NumCPU(); i++ {
-		go downloadCrate(crateChan, cratespath)
+	var returnCrate = make(chan Crate)
+	var doneChan = make(chan struct{})
+	workers := 2 * runtime.NumCPU()
+
+	for i := 0; i < workers; i++ {
+		go downloadCrate(crateChan, returnCrate, doneChan, cratespath)
 	}
+	go func() {
+		for crate := range returnCrate {
+			_, err := db.Exec(updateStmt, 1, crate.Size, time.Now(), crate.Name, crate.Vers)
+			if err != nil {
+				log.Println(err)
+			}
+		}
+	}()
 	notDownloaded, err := db.Query("select name, version, checksum, yanked from crate where downloaded = 0")
 	if err != nil {
 		return err
 	}
+	var crates []Crate
 	for notDownloaded.Next() {
 		var crate Crate
 		err := notDownloaded.Scan(&crate.Name, &crate.Vers, &crate.Cksum, &crate.Yanked)
 		if err != nil {
 			return err
 		}
+		crates = append(crates, crate)
+	}
+	for _, crate := range crates {
 		crateChan <- crate
 	}
+	for i := 0; i < workers; i++ {
+		<-doneChan
+	}
+	close(returnCrate)
 	return nil
 }
 
