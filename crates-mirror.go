@@ -47,6 +47,8 @@ func initialize_db(dbpath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.Exec("PRAGMA journal_mode=WAL")
 
 	if os.IsNotExist(dbExistError) {
 		_, err = db.Exec(initStmt)
@@ -94,15 +96,12 @@ func initializeRepo(db *sql.DB, registrypath string) error {
 }
 
 func loadInfo(db *sql.DB, registrypath, ignore string) error {
-	result, err := db.Query("select count(id) from crate")
 	var count int
-	result.Next()
-	err = result.Scan(&count)
+	err := db.QueryRow("select count(id) from crate").Scan(&count)
 	if err != nil {
 		return err
 	}
 	log.Println("Found", count, "rows")
-	result.Close()
 	if count != 0 { // info already loaded
 		return nil
 	}
