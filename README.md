@@ -7,8 +7,7 @@ of https://crates.io.  This can be used with
 dependency download faster when building Rust project.
 
 This fork adds more implementations of the crates-mirror
-### Requirements
-* Python3 (yes python3, python2 is dead)
+## Requirements
 * Good bandwidth (at least can access aws-s3 service of us region)
 * Large hard disk (at least 30G, the current size is 17G, 2018-11-02.)
 ## Go
@@ -30,6 +29,7 @@ The config.json has the folloing structure:
 ```
 ## Python (The original)
 
+* Python3 (yes python3, python2 is dead)
 ### How
 1. Clone this repo: `git clone https://github.com/tennix/crates-mirror`
 2. Fire a python virtualenv:
