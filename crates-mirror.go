@@ -228,6 +228,7 @@ func retrieveCrates(db *sql.DB, cratespath string) error {
 	for _, crate := range crates {
 		crateChan <- crate
 	}
+	close(crateChan)
 	for i := 0; i < workers; i++ {
 		<-doneChan
 	}
