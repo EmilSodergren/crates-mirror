@@ -19,7 +19,7 @@ This fork adds more implementations of the crates-mirror
 4. Add a config.json file in your current directory, or place it wherever and pass the path as an argument.
 5. Run the program `$GOBIN/crates-mirror [/path/to/config.json]`
 
-The config.json has the folloing structure:
+    The config.json has the following structure:
 ```
    {
        "cratespath":"/path/to/the/downloaded/crate/files",
