@@ -242,9 +242,7 @@ type Config struct {
 	DbPath       string `json:"dbpath"`
 }
 
-func main() {
-
-	log.SetFlags(log.Flags() | log.Llongfile)
+func handleArgs() (*Config, error) {
 	var configjson string
 	if len(os.Args) < 2 {
 		fmt.Println("No configfile provided. Using config.json")
@@ -252,27 +250,49 @@ func main() {
 	} else {
 		configjson = os.Args[1]
 	}
-	var config Config
+	var config = new(Config)
 	configcontent, err := ioutil.ReadFile(configjson)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	json.Unmarshal(configcontent, &config)
+	err = json.Unmarshal(configcontent, &config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+func run(config *Config) error {
+
 	var ignore = filepath.Join(config.RegistryPath, ".git")
 
 	db, err := initialize_db(config.DbPath)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	err = initializeRepo(db, config.RegistryPath)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	err = loadInfo(db, config.RegistryPath, ignore)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	err = retrieveCrates(db, config.CratesPath)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func main() {
+
+	log.SetFlags(log.Flags() | log.Llongfile)
+	config, err := handleArgs()
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = run(config)
 	if err != nil {
 		log.Fatal(err)
 	}
