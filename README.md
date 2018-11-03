@@ -22,8 +22,9 @@ This fork adds more implementations of the crates-mirror
     The config.json has the following structure:
 ```
    {
-       "cratespath":"/path/to/the/downloaded/crate/files",
+       "indexurl":"https://github.com/rust-lang/crates.io-index",
        "registrypath":"/path/to/the/crates.io-index",
+       "cratespath":"/path/to/the/downloaded/crate/files",
        "dbpath":"/path/to/the/metadata/database"
    }
 ```

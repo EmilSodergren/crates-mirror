@@ -20,9 +20,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// variables are "name" and "version"
-const index_url = "https://github.com/rust-lang/crates.io-index"
-
 const max_connection = 10
 
 const initStmt = `create table crate (
@@ -70,10 +67,10 @@ func initialize_db(dbpath string) (*sql.DB, error) {
 
 const insertUpdateHistoryStmt = "insert into update_history values(?, ?)"
 
-func initializeRepo(db *sql.DB, registrypath string) error {
+func initializeRepo(db *sql.DB, registrypath, indexurl string) error {
 	if _, err := os.Stat(registrypath); os.IsNotExist(err) {
 		os.Chdir(filepath.Dir(registrypath))
-		_, err := exec.Command("git", "clone", index_url, filepath.Base(registrypath)).Output()
+		_, err := exec.Command("git", "clone", indexurl, filepath.Base(registrypath)).Output()
 		if err != nil {
 			return err
 		}
@@ -185,7 +182,6 @@ func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan ch
 		}
 	}
 	doneChan <- struct{}{}
-
 }
 
 var updateStmt = "update crate set downloaded = ?, size = ?,  last_update = ? where name = ? and version = ?"
@@ -238,6 +234,7 @@ func retrieveCrates(db *sql.DB, cratespath, dlApi string) error {
 }
 
 type Config struct {
+	IndexURL     string `json:"indexurl"`
 	CratesPath   string `json:"cratespath"`
 	RegistryPath string `json:"registrypath"`
 	DbPath       string `json:"dbpath"`
@@ -293,7 +290,7 @@ func run(config *Config) error {
 	if err != nil {
 		return err
 	}
-	err = initializeRepo(db, config.RegistryPath)
+	err = initializeRepo(db, config.RegistryPath, config.IndexURL)
 	if err != nil {
 		return err
 	}
