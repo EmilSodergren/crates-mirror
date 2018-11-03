@@ -184,6 +184,28 @@ func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan ch
 	doneChan <- struct{}{}
 }
 
+type IndexApi struct {
+	Dl  string `json:"dl"`
+	Api string `json:"api"`
+}
+
+func readApi(registrypath string) (*IndexApi, error) {
+	apiConfig := filepath.Join(registrypath, "config.json")
+	if _, err := os.Stat(apiConfig); os.IsNotExist(err) {
+		return nil, err
+	}
+	var indexApi = new(IndexApi)
+	configcontent, err := ioutil.ReadFile(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(configcontent, indexApi)
+	if err != nil {
+		return nil, err
+	}
+	return indexApi, nil
+}
+
 var updateStmt = "update crate set downloaded = ?, size = ?,  last_update = ? where name = ? and version = ?"
 
 func retrieveCrates(db *sql.DB, cratespath, dlApi string) error {
@@ -258,28 +280,6 @@ func handleArgs() (*Config, error) {
 		return nil, err
 	}
 	return config, nil
-}
-
-type IndexApi struct {
-	Dl  string `json:"dl"`
-	Api string `json:"api"`
-}
-
-func readApi(registrypath string) (*IndexApi, error) {
-	apiConfig := filepath.Join(registrypath, "config.json")
-	if _, err := os.Stat(apiConfig); os.IsNotExist(err) {
-		return nil, err
-	}
-	var indexApi = new(IndexApi)
-	configcontent, err := ioutil.ReadFile(apiConfig)
-	if err != nil {
-		return nil, err
-	}
-	err = json.Unmarshal(configcontent, indexApi)
-	if err != nil {
-		return nil, err
-	}
-	return indexApi, nil
 }
 
 func run(config *Config) error {
