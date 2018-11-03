@@ -4,3 +4,5 @@ env/
 crates/
 crates.io-index/
 config.json
+/target
+**/*.rs.bk

@@ -1,0 +1,15 @@
+[package]
+name = "crustes"
+version = "0.1.0"
+authors = ["Henrik Södergren <henrik.sodergren@outlook.com>"]
+
+[dependencies]
+rusqlite = "^0.15"
+time = "^0.1"
+serde = "^1"
+serde_derive = "^1"
+serde_json = "^1"
+log = "^0.4"
+failure = "^0.1"
+failure_derive = "^0.1"
+
