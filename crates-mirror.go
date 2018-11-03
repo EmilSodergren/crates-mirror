@@ -55,7 +55,7 @@ func initialize_db(dbpath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(2)
+	db.SetMaxOpenConns(1)
 	db.Exec("PRAGMA journal_mode=WAL")
 
 	if os.IsNotExist(dbExistError) {
@@ -206,11 +206,13 @@ func retrieveCrates(db *sql.DB, cratespath, dlApi string) error {
 				log.Println(err)
 			}
 		}
+		doneChan <- struct{}{}
 	}()
 	notDownloaded, err := db.Query("select name, version, checksum, yanked from crate where downloaded = 0")
 	if err != nil {
 		return err
 	}
+	// Read all crates into a slice to only have one database connection active at a time
 	var crates []Crate
 	for notDownloaded.Next() {
 		var crate Crate
@@ -220,14 +222,18 @@ func retrieveCrates(db *sql.DB, cratespath, dlApi string) error {
 		}
 		crates = append(crates, crate)
 	}
+	notDownloaded.Close()
 	for _, crate := range crates {
 		crateChan <- crate
 	}
+	// Close and wait for all workers
 	close(crateChan)
 	for i := 0; i < workers; i++ {
 		<-doneChan
 	}
+	// Close and wait for the data base writer
 	close(returnCrate)
+	<-doneChan
 	return nil
 }
 
