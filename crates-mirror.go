@@ -162,10 +162,6 @@ func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan ch
 			continue
 		}
 		cratefilepath := filepath.Join(directory, filename)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
 		var responseData = new(bytes.Buffer)
 		io.Copy(responseData, resp.Body)
 		resp.Body.Close()
@@ -291,10 +287,10 @@ func run(config *Config) error {
 	if err != nil {
 		return err
 	}
-	//err = initializeRepo(db, config.RegistryPath)
-	//if err != nil {
-	//return err
-	//}
+	err = initializeRepo(db, config.RegistryPath)
+	if err != nil {
+		return err
+	}
 	err = loadInfo(db, config.RegistryPath, ignore)
 	if err != nil {
 		return err
