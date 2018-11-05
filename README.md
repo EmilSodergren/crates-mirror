@@ -25,7 +25,8 @@ This fork adds more implementations of the crates-mirror
        "indexurl":"https://github.com/rust-lang/crates.io-index",
        "registrypath":"/path/to/the/crates.io-index",
        "cratespath":"/path/to/the/downloaded/crate/files",
-       "dbpath":"/path/to/the/metadata/database"
+       "dbpath":"/path/to/the/metadata/database",
+       "updateindex":true    <--- if not present, will use true as default
    }
 ```
 ## Python (The original)

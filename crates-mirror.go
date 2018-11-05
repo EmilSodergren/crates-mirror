@@ -320,6 +320,7 @@ type Config struct {
 	CratesPath   string `json:"cratespath"`
 	RegistryPath string `json:"registrypath"`
 	DbPath       string `json:"dbpath"`
+	UpdateIndex  bool   `json:"updateindex"`
 }
 
 func handleArgs() (*Config, error) {
@@ -330,7 +331,7 @@ func handleArgs() (*Config, error) {
 	} else {
 		configjson = os.Args[1]
 	}
-	var config = new(Config)
+	var config = &Config{UpdateIndex: true}
 	configcontent, err := ioutil.ReadFile(configjson)
 	if err != nil {
 		return nil, err
@@ -350,9 +351,11 @@ func run(config *Config) error {
 	if err != nil {
 		return err
 	}
-	err = initializeRepo(db, config.RegistryPath, config.IndexURL)
-	if err != nil {
-		return err
+	if config.UpdateIndex {
+		err = initializeRepo(db, config.RegistryPath, config.IndexURL)
+		if err != nil {
+			return err
+		}
 	}
 	apiCaller, err := readApi(config.RegistryPath)
 	if err != nil {
