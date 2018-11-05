@@ -2,19 +2,22 @@ extern crate rusqlite;
 extern crate time;
 extern crate serde;
 extern crate serde_json;
-extern crate log;
+#[macro_use] extern crate log;
 extern crate failure;
 #[macro_use] extern crate serde_derive;
 #[macro_use] extern crate failure_derive;
 
-use std::io::prelude;
+use rusqlite::{Connection};
+// use std::io::prelude;
 use std::io;
 use std::fs::File;
 use std::path::PathBuf;
 use failure::Error;
+use std::process::Command;
 
 
-const INIT_STMT : &str = "create table crate (
+const CREATE_CRATE_TABLE : &str = "
+create table crate (
     id integer primary key,
     name text,
     version text,
@@ -23,7 +26,8 @@ const INIT_STMT : &str = "create table crate (
     yanked integer default 0,
     downloaded integer default 0,
     last_update text
-);
+);";
+const CREATE_HIST_TABLE : &str = "
 create table update_history (
     commit_id text,
     timestamp text
@@ -32,6 +36,8 @@ create table update_history (
 const DL : &str = "https://crates.io/api/v1/crates/%s/%s/download";
 
 const INDEX_URL : &str = "https://github.com/rust-lang/crates.io-index";
+
+const INSERT_UPDATE_HISTORY_STMT : &str = "INSERT INTO update_history VALUES(?, ?)";
 
 type MyResult<T> = std::result::Result<T, Error>;
 struct Crate {
@@ -93,7 +99,50 @@ fn _main() -> MyResult<()> {
 }
 
 fn run(conf : Config) -> MyResult<()> {
-    let db = rusqlite::Connection::open(conf.db_path)?;
+    info!("running");
+    let db_conn = init_db(&conf.db_path.into())?;
+    init_repo(&db_conn, &conf.registry_path, INDEX_URL)?;
+
     Ok(())
 }
 
+fn init_db(path : &PathBuf) -> MyResult<rusqlite::Connection> {
+    info!("init database");
+    let existed = path.exists();
+    let conn = rusqlite::Connection::open(path)?;
+
+    if !existed {
+        conn.execute(CREATE_CRATE_TABLE, Vec::<String>::new())?;
+        conn.execute(CREATE_HIST_TABLE, Vec::<String>::new())?;
+        println!("{:?} didn't exist", path);
+    }
+    Ok(conn)
+}
+
+fn init_repo(db : &Connection, regpath_str: &String, indexurl : &str) -> MyResult<()>{
+    info!("init repo");
+    let regpath = PathBuf::from(regpath_str);
+    if !regpath.exists() {
+        info!("git clone {}", indexurl);
+        Command::new("git")
+            .args(&["clone", indexurl, regpath.to_str().unwrap()])
+            .current_dir(&regpath.parent().unwrap())
+            .spawn()?
+            .wait()?;
+    } else {
+        info!("git pull");
+        Command::new("git")
+            .args(&["pull"])
+            .current_dir(&regpath)
+            .spawn()?
+            .wait()?;
+    }
+    let output = Command::new("git")
+        .args(&["rev-parse", "HEAD"])
+        .current_dir(&regpath)
+        .output()?
+        .stdout;
+    // db.execute(INSERT_UPDATE_HISTORY_STMT, &[output, &time::get_time()])?;
+    info!("output {}", String::from_utf8(output)?);
+    Ok(())
+}
