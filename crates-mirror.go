@@ -162,7 +162,7 @@ func createDirectory(name, cratespath string) string {
 }
 
 type crateApiCaller struct {
-	ServerApi string
+	ServerApi string `json:"dl"`
 }
 
 type Crate struct {
@@ -217,8 +217,7 @@ func (c *crateApiCaller) Download(cratename, version string) (*bytes.Buffer, err
 	return responseData, nil
 }
 
-func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersion, doneChan chan<- struct{}, cratesdirpath, dlApi string) {
-	var caller = crateApiCaller{dlApi}
+func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersion, doneChan chan<- struct{}, cratesdirpath string, caller *crateApiCaller) {
 	for crate := range crateChan {
 		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
 		directory := createDirectory(crate.Name, cratesdirpath)
@@ -250,17 +249,12 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 	doneChan <- struct{}{}
 }
 
-type IndexApi struct {
-	Dl  string `json:"dl"`
-	Api string `json:"api"`
-}
-
-func readApi(registrypath string) (*IndexApi, error) {
+func readApi(registrypath string) (*crateApiCaller, error) {
 	apiConfig := filepath.Join(registrypath, "config.json")
 	if _, err := os.Stat(apiConfig); os.IsNotExist(err) {
 		return nil, err
 	}
-	var indexApi = new(IndexApi)
+	var indexApi = new(crateApiCaller)
 	configcontent, err := ioutil.ReadFile(apiConfig)
 	if err != nil {
 		return nil, err
@@ -274,14 +268,14 @@ func readApi(registrypath string) (*IndexApi, error) {
 
 var updateStmt = "update crate_version set downloaded = ?, size = ?,  last_update = ? where name = ? and version = ?"
 
-func retrieveCrates(db *sql.DB, cratespath, dlApi string) error {
+func retrieveCrates(db *sql.DB, cratespath string, caller *crateApiCaller) error {
 	var crateChan = make(chan CrateVersion)
 	var returnCrate = make(chan CrateVersion)
 	var doneChan = make(chan struct{})
 	workers := 2 * runtime.NumCPU()
 
 	for i := 0; i < workers; i++ {
-		go downloadCrate(crateChan, returnCrate, doneChan, cratespath, dlApi)
+		go downloadCrate(crateChan, returnCrate, doneChan, cratespath, caller)
 	}
 	go func() {
 		for crate := range returnCrate {
@@ -360,16 +354,15 @@ func run(config *Config) error {
 	if err != nil {
 		return err
 	}
-	indexApi, err := readApi(config.RegistryPath)
+	apiCaller, err := readApi(config.RegistryPath)
 	if err != nil {
 		return err
 	}
-	var apiCaller = &crateApiCaller{indexApi.Dl}
 	err = loadInfo(db, apiCaller, config.RegistryPath, ignore)
 	if err != nil {
 		return err
 	}
-	err = retrieveCrates(db, config.CratesPath, indexApi.Dl)
+	err = retrieveCrates(db, config.CratesPath, apiCaller)
 	if err != nil {
 		return err
 	}
