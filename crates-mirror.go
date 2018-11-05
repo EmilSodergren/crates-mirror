@@ -23,6 +23,11 @@ import (
 const max_connection = 10
 
 const initStmt = `create table crate (
+	name text primary key,
+	description text,
+	documentation text
+);
+create table crate_version (
     id integer primary key,
     name text,
     version text,
@@ -30,14 +35,16 @@ const initStmt = `create table crate (
     checksum text,
     yanked integer default 0,
     downloaded integer default 0,
+	license text,
     last_update text
 );
+
 create table update_history (
     commit_id text,
     timestamp text
 );`
 
-type Crate struct {
+type CrateVersion struct {
 	Name   string `json:"name"`
 	Vers   string `json:"vers"`
 	Cksum  string `json:"cksum"`
@@ -88,9 +95,9 @@ func initializeRepo(db *sql.DB, registrypath, indexurl string) error {
 	return err
 }
 
-func loadInfo(db *sql.DB, registrypath, ignore string) error {
+func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string) error {
 	var count int
-	err := db.QueryRow("select count(id) from crate").Scan(&count)
+	err := db.QueryRow("select count(id) from crate_version").Scan(&count)
 	if err != nil {
 		return err
 	}
@@ -112,11 +119,21 @@ func loadInfo(db *sql.DB, registrypath, ignore string) error {
 			if err != nil {
 				return err
 			}
+			fmt.Println("Reading file", info.Name())
 			scanner := bufio.NewScanner(f)
+			ci, err := apiCaller.CrateInfo(info.Name())
+			if err != nil {
+				return err
+			}
+			_, err = db.Exec("insert into crate (name, description, documentation) values (?,?,?)", ci.Name, ci.Crate.Description, ci.Crate.Documentation)
+			if err != nil {
+				return err
+			}
 			for scanner.Scan() {
-				var crate Crate
+				var crate CrateVersion
+				//req := fmt.Sprintf("%s/%s/%s", dlApi, crate.Name, crate.Vers)
 				json.Unmarshal(scanner.Bytes(), &crate)
-				_, err := db.Exec("insert into crate (name, version, checksum, yanked) values (?, ?, ?, ?)", crate.Name, crate.Vers, crate.Cksum, crate.Yanked)
+				_, err := db.Exec("insert into crate_version (name, version, checksum, yanked) values (?, ?, ?, ?)", crate.Name, crate.Vers, crate.Cksum, crate.Yanked)
 				if err != nil {
 					return err
 				}
@@ -144,27 +161,76 @@ func createDirectory(name, cratespath string) string {
 	return directory
 }
 
-func downloadCrate(crateChan <-chan Crate, returnCrate chan<- Crate, doneChan chan<- struct{}, cratesdirpath, dlApi string) {
+type crateApiCaller struct {
+	ServerApi string
+}
+
+type Crate struct {
+	Description   string `json:"description"`
+	Documentation string `json:"documentation"`
+}
+
+type CrateInfo struct {
+	Name  string
+	Crate Crate `json:"crate"`
+}
+
+func (c *crateApiCaller) CrateInfo(cratename string) (*CrateInfo, error) {
+	req := fmt.Sprintf("%s/%s", c.ServerApi, cratename)
+	resp, err := http.Get(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", req, resp.Status)
+	}
+	var crateInfo = new(CrateInfo)
+	var body = new(bytes.Buffer)
+	_, err = io.Copy(body, resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(body.Bytes(), crateInfo)
+	if err != nil {
+		return nil, err
+	}
+	crateInfo.Name = cratename
+	return crateInfo, nil
+}
+
+func (c *crateApiCaller) Download(cratename, version string) (*bytes.Buffer, error) {
+	req := fmt.Sprintf("%s/%s/%s/download", c.ServerApi, cratename, version)
+	resp, err := http.Get(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", req, resp.Status)
+	}
+	var responseData = new(bytes.Buffer)
+	_, err = io.Copy(responseData, resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return responseData, nil
+}
+
+func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersion, doneChan chan<- struct{}, cratesdirpath, dlApi string) {
+	var caller = crateApiCaller{dlApi}
 	for crate := range crateChan {
 		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
 		directory := createDirectory(crate.Name, cratesdirpath)
-		req := fmt.Sprintf("%s/%s/%s/download", dlApi, crate.Name, crate.Vers)
-		resp, err := http.Get(req)
+		responseData, err := caller.Download(crate.Name, crate.Vers)
 		if err != nil {
 			log.Println(err)
 			continue
 		}
-		if resp.StatusCode != http.StatusOK {
-			log.Println(req, ": ", resp.Status)
-			continue
-		}
-		cratefilepath := filepath.Join(directory, filename)
-		var responseData = new(bytes.Buffer)
-		io.Copy(responseData, resp.Body)
-		resp.Body.Close()
 		hash := sha256.New()
 		hash.Write(responseData.Bytes())
 		if fmt.Sprintf("%x", hash.Sum(nil)) == crate.Cksum {
+			cratefilepath := filepath.Join(directory, filename)
 			out, err := os.Create(cratefilepath)
 			if err != nil {
 				log.Println(err)
@@ -206,11 +272,11 @@ func readApi(registrypath string) (*IndexApi, error) {
 	return indexApi, nil
 }
 
-var updateStmt = "update crate set downloaded = ?, size = ?,  last_update = ? where name = ? and version = ?"
+var updateStmt = "update crate_version set downloaded = ?, size = ?,  last_update = ? where name = ? and version = ?"
 
 func retrieveCrates(db *sql.DB, cratespath, dlApi string) error {
-	var crateChan = make(chan Crate)
-	var returnCrate = make(chan Crate)
+	var crateChan = make(chan CrateVersion)
+	var returnCrate = make(chan CrateVersion)
 	var doneChan = make(chan struct{})
 	workers := 2 * runtime.NumCPU()
 
@@ -226,14 +292,14 @@ func retrieveCrates(db *sql.DB, cratespath, dlApi string) error {
 		}
 		doneChan <- struct{}{}
 	}()
-	notDownloaded, err := db.Query("select name, version, checksum, yanked from crate where downloaded = 0")
+	notDownloaded, err := db.Query("select name, version, checksum, yanked from crate_version where downloaded = 0")
 	if err != nil {
 		return err
 	}
 	// Read all crates into a slice to only have one database connection active at a time
-	var crates []Crate
+	var crates []CrateVersion
 	for notDownloaded.Next() {
-		var crate Crate
+		var crate CrateVersion
 		err := notDownloaded.Scan(&crate.Name, &crate.Vers, &crate.Cksum, &crate.Yanked)
 		if err != nil {
 			return err
@@ -294,11 +360,12 @@ func run(config *Config) error {
 	if err != nil {
 		return err
 	}
-	err = loadInfo(db, config.RegistryPath, ignore)
+	indexApi, err := readApi(config.RegistryPath)
 	if err != nil {
 		return err
 	}
-	indexApi, err := readApi(config.RegistryPath)
+	var apiCaller = &crateApiCaller{indexApi.Dl}
+	err = loadInfo(db, apiCaller, config.RegistryPath, ignore)
 	if err != nil {
 		return err
 	}
