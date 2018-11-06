@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -87,36 +88,51 @@ func initializeRepo(db *sql.DB, registrypath, indexurl string) error {
 	if err != nil {
 		return err
 	}
-	output, err := exec.Command("git", "pull").Output()
+	log.Println("Pulling in", registrypath)
+	output, err := exec.Command("git", "pull", "--rebase=false", "--ff-only").Output()
 	if err != nil {
 		return err
 	}
+	log.Println(registrypath, "is up to date")
 	output, err = exec.Command("git", "rev-parse", "HEAD").Output()
 	_, err = db.Exec(insertUpdateHistoryStmt, string(output), time.Now())
 	return err
 }
 
-func loadFileInfo(db *sql.DB, pathChan <-chan string, dbChan chan<- string, doneChan chan<- struct{}, apiCaller *crateApiCaller) {
+type FileInfos struct {
+	Path            string
+	Versions        map[string]struct{}
+	CrateEntryExist bool
+}
+
+func loadFileInfo(db *sql.DB, fileinfoChan <-chan FileInfos, dbChan chan<- string, doneChan chan<- struct{}, apiCaller *crateApiCaller) {
 	defer func() { doneChan <- struct{}{} }()
-	for path := range pathChan {
-		f, err := os.Open(path)
+	for path := range fileinfoChan {
+		f, err := os.Open(path.Path)
 		if err != nil {
 			log.Println(err)
 			continue
+		}
+		if !path.CrateEntryExist {
+			ci, err := apiCaller.CrateInfo(filepath.Base(path.Path))
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			desc := strings.Replace(ci.Crate.Description, "'", "''", -1)
+			dbChan <- fmt.Sprintf("insert into crate (name, description, documentation) values ('%s','%s','%s')", ci.Name, desc, ci.Crate.Documentation)
 		}
 		scanner := bufio.NewScanner(f)
-		ci, err := apiCaller.CrateInfo(filepath.Base(path))
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		dbChan <- fmt.Sprintf("insert into crate (name, description, documentation) values ('%s','%s','%s')", ci.Name, ci.Crate.Description, ci.Crate.Documentation)
 		for scanner.Scan() {
 			var crate CrateVersion
 			err = json.Unmarshal(scanner.Bytes(), &crate)
 			if err != nil {
 				log.Println(err)
 				break
+			}
+			if _, found := path.Versions[crate.Vers]; found {
+				// Already inserted, continue to next
+				continue
 			}
 			versionInfo, err := apiCaller.CrateVersionInfo(crate)
 			if err != nil {
@@ -134,15 +150,7 @@ func loadFileInfo(db *sql.DB, pathChan <-chan string, dbChan chan<- string, done
 }
 
 func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string) error {
-	var count int
-	err := db.QueryRow("select count(id) from crate_version").Scan(&count)
-	if err != nil {
-		return err
-	}
-	if count != 0 { // info already loaded
-		return nil
-	}
-	var pathChan = make(chan string)
+	var pathChan = make(chan FileInfos)
 	var doneChan = make(chan struct{})
 	var insertChan = make(chan string)
 	var workers = 2 * runtime.NumCPU()
@@ -151,15 +159,15 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 	}
 	go func() {
 		for insert := range insertChan {
-			fmt.Println(insert)
 			_, err := db.Exec(insert)
 			if err != nil {
 				log.Println(err)
+				fmt.Println(insert)
 			}
 		}
 		doneChan <- struct{}{}
 	}()
-	err = filepath.Walk(registrypath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(registrypath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -170,8 +178,24 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 			return nil
 		}
 		if !info.IsDir() {
-			fmt.Println("Reading info from", filepath.Base(path))
-			pathChan <- path
+			var count int
+			err = db.QueryRow("select count(*) from crate where name=?", info.Name()).Scan(&count)
+			if err != nil {
+				return err
+			}
+			rows, err := db.Query("select version from crate_version where name=?", info.Name())
+			if err != nil {
+				return err
+			}
+			var versions = make(map[string]struct{})
+			for rows.Next() {
+				var ver string
+				rows.Scan(&ver)
+				versions[ver] = struct{}{}
+			}
+			rows.Close()
+			fmt.Println("Reading info from", info.Name())
+			pathChan <- FileInfos{path, versions, count != 0}
 		}
 		return nil
 	})
@@ -226,10 +250,10 @@ func (c *crateApiCaller) CrateVersionInfo(crate CrateVersion) (*CrateVersionInfo
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	var cvi = new(struct {
 		CrateVersionInfo *CrateVersionInfo `json:"version"`
 	})
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: %s", req, resp.Status)
 	}
