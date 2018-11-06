@@ -96,41 +96,41 @@ func initializeRepo(db *sql.DB, registrypath, indexurl string) error {
 	return err
 }
 
-func loadFileInfo(db *sql.DB, path string, apiCaller *crateApiCaller) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	ci, err := apiCaller.CrateInfo(filepath.Base(path))
-	if err != nil {
-		return err
-	}
-	_, err = db.Exec("insert into crate (name, description, documentation) values (?,?,?)", ci.Name, ci.Crate.Description, ci.Crate.Documentation)
-	if err != nil {
-		return err
-	}
-	for scanner.Scan() {
-		var crate CrateVersion
-		err = json.Unmarshal(scanner.Bytes(), &crate)
+func loadFileInfo(db *sql.DB, pathChan <-chan string, dbChan chan<- string, doneChan chan<- struct{}, apiCaller *crateApiCaller) {
+	defer func() { doneChan <- struct{}{} }()
+	for path := range pathChan {
+		f, err := os.Open(path)
 		if err != nil {
-			return err
+			log.Println(err)
+			continue
 		}
-		versionInfo, err := apiCaller.CrateVersionInfo(crate)
+		scanner := bufio.NewScanner(f)
+		ci, err := apiCaller.CrateInfo(filepath.Base(path))
 		if err != nil {
-			return err
+			log.Println(err)
+			continue
 		}
-		crate.License = versionInfo.Licence
-		_, err = db.Exec("insert into crate_version (name, version, checksum, yanked, license) values (?,?,?,?,?)", crate.Name, crate.Vers, crate.Cksum, crate.Yanked, crate.License)
-		if err != nil {
-			return err
+		dbChan <- fmt.Sprintf("insert into crate (name, description, documentation) values ('%s','%s','%s')", ci.Name, ci.Crate.Description, ci.Crate.Documentation)
+		for scanner.Scan() {
+			var crate CrateVersion
+			err = json.Unmarshal(scanner.Bytes(), &crate)
+			if err != nil {
+				log.Println(err)
+				break
+			}
+			versionInfo, err := apiCaller.CrateVersionInfo(crate)
+			if err != nil {
+				log.Println(err)
+				break
+			}
+			crate.License = versionInfo.Licence
+			dbChan <- fmt.Sprintf("insert into crate_version (name, version, checksum, yanked, license) values ('%s','%s','%s',%t,'%s')", crate.Name, crate.Vers, crate.Cksum, crate.Yanked, crate.License)
 		}
+		if err := scanner.Err(); err != nil {
+			log.Println(err)
+		}
+		f.Close()
 	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return nil
 }
 
 func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string) error {
@@ -142,7 +142,24 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 	if count != 0 { // info already loaded
 		return nil
 	}
-	return filepath.Walk(registrypath, func(path string, info os.FileInfo, err error) error {
+	var pathChan = make(chan string)
+	var doneChan = make(chan struct{})
+	var insertChan = make(chan string)
+	var workers = 2 * runtime.NumCPU()
+	for i := 0; i < workers; i++ {
+		go loadFileInfo(db, pathChan, insertChan, doneChan, apiCaller)
+	}
+	go func() {
+		for insert := range insertChan {
+			fmt.Println(insert)
+			_, err := db.Exec(insert)
+			if err != nil {
+				log.Println(err)
+			}
+		}
+		doneChan <- struct{}{}
+	}()
+	err = filepath.Walk(registrypath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -154,13 +171,21 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 		}
 		if !info.IsDir() {
 			fmt.Println("Reading info from", filepath.Base(path))
-			err = loadFileInfo(db, path, apiCaller)
-			if err != nil {
-				return err
-			}
+			pathChan <- path
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	close(pathChan)
+	for i := 0; i < workers; i++ {
+		<-doneChan
+	}
+	close(insertChan)
+	<-doneChan
+	close(doneChan)
+	return nil
 }
 
 func createDirectory(name, cratespath string) string {
@@ -262,6 +287,7 @@ func (c *crateApiCaller) Download(cratename, version string) (*bytes.Buffer, err
 	return responseData, nil
 }
 func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersion, doneChan chan<- struct{}, cratesdirpath string, caller *crateApiCaller) {
+	defer func() { doneChan <- struct{}{} }()
 	for crate := range crateChan {
 		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
 		directory := createDirectory(crate.Name, cratesdirpath)
@@ -290,7 +316,6 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 			log.Println("The response was", string(responseData.Bytes()))
 		}
 	}
-	doneChan <- struct{}{}
 }
 
 func readApi(registrypath string) (*crateApiCaller, error) {
