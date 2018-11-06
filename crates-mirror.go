@@ -96,13 +96,14 @@ func initializeRepo(db *sql.DB, registrypath, indexurl string) error {
 	return err
 }
 
-func loadFileInfo(db *sql.DB, path, crateName string, apiCaller *crateApiCaller) error {
+func loadFileInfo(db *sql.DB, path string, apiCaller *crateApiCaller) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 	scanner := bufio.NewScanner(f)
-	ci, err := apiCaller.CrateInfo(crateName)
+	ci, err := apiCaller.CrateInfo(filepath.Base(path))
 	if err != nil {
 		return err
 	}
@@ -152,7 +153,8 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 			return nil
 		}
 		if !info.IsDir() {
-			err = loadFileInfo(db, path, info.Name(), apiCaller)
+			fmt.Println("Reading info from", filepath.Base(path))
+			err = loadFileInfo(db, path, apiCaller)
 			if err != nil {
 				return err
 			}
