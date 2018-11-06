@@ -179,11 +179,6 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 			return nil
 		}
 		if !info.IsDir() {
-			var count int
-			err = db.QueryRow("select count(*) from crate where name=?", info.Name()).Scan(&count)
-			if err != nil {
-				return err
-			}
 			rows, err := db.Query("select version from crate_version where name=?", info.Name())
 			if err != nil {
 				return err
@@ -195,6 +190,11 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 				versions[ver] = struct{}{}
 			}
 			rows.Close()
+			var count int
+			err = db.QueryRow("select count(*) from crate where name=?", info.Name()).Scan(&count)
+			if err != nil {
+				return err
+			}
 			fmt.Println("Reading info from", info.Name())
 			pathChan <- FileInfos{path, versions, count != 0}
 		}
@@ -317,6 +317,25 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 	for crate := range crateChan {
 		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
 		directory := createDirectory(crate.Name, cratesdirpath)
+		cratefilepath := filepath.Join(directory, filename)
+		// If the file exist, dont download it again
+		if _, err := os.Stat(cratefilepath); err == nil {
+			f, err := os.Open(cratefilepath)
+			if err != nil {
+				log.Println(err)
+			}
+			content, err := ioutil.ReadAll(f)
+			f.Close()
+			if err != nil {
+				log.Println(err)
+			}
+			hash := sha256.New()
+			hash.Write(content)
+			if fmt.Sprintf("%x", hash.Sum(nil)) == crate.Cksum {
+				log.Println(filename, "already exist. No need to download.")
+				continue
+			}
+		}
 		responseData, err := caller.Download(crate.Name, crate.Vers)
 		if err != nil {
 			log.Println(err)
@@ -325,7 +344,6 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 		hash := sha256.New()
 		hash.Write(responseData.Bytes())
 		if fmt.Sprintf("%x", hash.Sum(nil)) == crate.Cksum {
-			cratefilepath := filepath.Join(directory, filename)
 			out, err := os.Create(cratefilepath)
 			if err != nil {
 				log.Println(err)
@@ -405,9 +423,10 @@ func retrieveCrates(db *sql.DB, cratespath string, caller *crateApiCaller) error
 	for i := 0; i < workers; i++ {
 		<-doneChan
 	}
-	// Close and wait for the data base writer
+	// Close and wait for the database writer
 	close(returnCrate)
 	<-doneChan
+	close(doneChan)
 	return nil
 }
 
