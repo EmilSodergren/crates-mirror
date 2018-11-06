@@ -45,11 +45,12 @@ create table update_history (
 );`
 
 type CrateVersion struct {
-	Name   string `json:"name"`
-	Vers   string `json:"vers"`
-	Cksum  string `json:"cksum"`
-	Size   int64
-	Yanked bool `json:"yanked"`
+	Name    string `json:"name"`
+	Vers    string `json:"vers"`
+	Cksum   string `json:"cksum"`
+	Size    int64
+	License string
+	Yanked  bool `json:"yanked"`
 }
 
 func initialize_db(dbpath string) (*sql.DB, error) {
@@ -95,14 +96,13 @@ func initializeRepo(db *sql.DB, registrypath, indexurl string) error {
 	return err
 }
 
-func loadFileInfo(db *sql.DB, path string, info os.FileInfo, apiCaller *crateApiCaller) error {
+func loadFileInfo(db *sql.DB, path, crateName string, apiCaller *crateApiCaller) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	fmt.Println("Reading file", info.Name())
 	scanner := bufio.NewScanner(f)
-	ci, err := apiCaller.CrateInfo(info.Name())
+	ci, err := apiCaller.CrateInfo(crateName)
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,8 @@ func loadFileInfo(db *sql.DB, path string, info os.FileInfo, apiCaller *crateApi
 		if err != nil {
 			return err
 		}
-		_, err = db.Exec("insert into crate_version (name, version, checksum, yanked, license) values (?,?,?,?,?)", crate.Name, crate.Vers, crate.Cksum, crate.Yanked, versionInfo.Licence)
+		crate.License = versionInfo.Licence
+		_, err = db.Exec("insert into crate_version (name, version, checksum, yanked, license) values (?,?,?,?,?)", crate.Name, crate.Vers, crate.Cksum, crate.Yanked, crate.License)
 		if err != nil {
 			return err
 		}
@@ -151,7 +152,7 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 			return nil
 		}
 		if !info.IsDir() {
-			err = loadFileInfo(db, path, info, apiCaller)
+			err = loadFileInfo(db, path, info.Name(), apiCaller)
 			if err != nil {
 				return err
 			}
@@ -258,7 +259,6 @@ func (c *crateApiCaller) Download(cratename, version string) (*bytes.Buffer, err
 	}
 	return responseData, nil
 }
-
 func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersion, doneChan chan<- struct{}, cratesdirpath string, caller *crateApiCaller) {
 	for crate := range crateChan {
 		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
