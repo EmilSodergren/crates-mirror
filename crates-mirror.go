@@ -154,9 +154,11 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 	var doneChan = make(chan struct{})
 	var insertChan = make(chan string)
 	var workers = 2 * runtime.NumCPU()
+	// Do the I/O heavy work in parallel
 	for i := 0; i < workers; i++ {
 		go loadFileInfo(db, pathChan, insertChan, doneChan, apiCaller)
 	}
+	// Collect the information and put it in to the database
 	go func() {
 		for insert := range insertChan {
 			_, err := db.Exec(insert)
@@ -167,6 +169,7 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 		}
 		doneChan <- struct{}{}
 	}()
+	// Determine which project needs to be scraped for metadata.
 	err := filepath.Walk(registrypath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -232,9 +235,9 @@ type crateApiCaller struct {
 }
 
 type Crate struct {
+	Name          string `json:"id"`
 	Description   string `json:"description"`
 	Documentation string `json:"documentation"`
-	Name          string `json:"id"`
 }
 
 type CrateInfo struct {
@@ -367,10 +370,11 @@ func retrieveCrates(db *sql.DB, cratespath string, caller *crateApiCaller) error
 	var returnCrate = make(chan CrateVersion)
 	var doneChan = make(chan struct{})
 	workers := 2 * runtime.NumCPU()
-
+	// Do the I/O heavy work in parallel
 	for i := 0; i < workers; i++ {
 		go downloadCrate(crateChan, returnCrate, doneChan, cratespath, caller)
 	}
+	// Collect the information and put it in to the database
 	go func() {
 		for crate := range returnCrate {
 			_, err := db.Exec(updateStmt, 1, crate.Size, time.Now(), crate.Name, crate.Vers)
@@ -384,7 +388,7 @@ func retrieveCrates(db *sql.DB, cratespath string, caller *crateApiCaller) error
 	if err != nil {
 		return err
 	}
-	// Read all crates into a slice to only have one database connection active at a time
+	// Read all crates into a slice to have less database interaction
 	var crates []CrateVersion
 	for notDownloaded.Next() {
 		var crate CrateVersion
@@ -425,6 +429,7 @@ func handleArgs() (*Config, error) {
 	} else {
 		configjson = os.Args[1]
 	}
+	// If UpdateIndex is omitted, use true as default
 	var config = &Config{UpdateIndex: true}
 	configcontent, err := ioutil.ReadFile(configjson)
 	if err != nil {
