@@ -21,8 +21,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const max_connection = 10
-
 const initStmt = `create table crate (
 	name text primary key,
 	description text,
