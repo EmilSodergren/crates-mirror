@@ -108,19 +108,19 @@ type FileInfos struct {
 func loadFileInfo(db *sql.DB, fileinfoChan <-chan FileInfos, dbChan chan<- string, doneChan chan<- struct{}, apiCaller *crateApiCaller) {
 	defer func() { doneChan <- struct{}{} }()
 	for path := range fileinfoChan {
-		f, err := os.Open(path.Path)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
 		if !path.CrateEntryExist {
-			ci, err := apiCaller.CrateInfo(filepath.Base(path.Path))
+			crate, err := apiCaller.CrateInfo(filepath.Base(path.Path))
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-			desc := strings.Replace(ci.Crate.Description, "'", "''", -1)
-			dbChan <- fmt.Sprintf("insert into crate (name, description, documentation) values ('%s','%s','%s')", ci.Name, desc, ci.Crate.Documentation)
+			desc := strings.Replace(crate.Description, "'", "''", -1)
+			dbChan <- fmt.Sprintf("insert into crate (name, description, documentation) values ('%s','%s','%s')", crate.Name, desc, crate.Documentation)
+		}
+		f, err := os.Open(path.Path)
+		if err != nil {
+			log.Println(err)
+			continue
 		}
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
@@ -234,10 +234,10 @@ type crateApiCaller struct {
 type Crate struct {
 	Description   string `json:"description"`
 	Documentation string `json:"documentation"`
+	Name          string `json:"id"`
 }
 
 type CrateInfo struct {
-	Name  string
 	Crate Crate `json:"crate"`
 }
 type CrateVersionInfo struct {
@@ -269,7 +269,7 @@ func (c *crateApiCaller) CrateVersionInfo(crate CrateVersion) (*CrateVersionInfo
 	return cvi.CrateVersionInfo, nil
 }
 
-func (c *crateApiCaller) CrateInfo(cratename string) (*CrateInfo, error) {
+func (c *crateApiCaller) CrateInfo(cratename string) (*Crate, error) {
 	req := fmt.Sprintf("%s/%s", c.ServerApi, cratename)
 	resp, err := http.Get(req)
 	if err != nil {
@@ -279,7 +279,9 @@ func (c *crateApiCaller) CrateInfo(cratename string) (*CrateInfo, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: %s", req, resp.Status)
 	}
-	var crateInfo = new(CrateInfo)
+	var crateInfo = new(struct {
+		Crate *Crate `json:"crate"`
+	})
 	var body = new(bytes.Buffer)
 	_, err = io.Copy(body, resp.Body)
 	if err != nil {
@@ -289,8 +291,7 @@ func (c *crateApiCaller) CrateInfo(cratename string) (*CrateInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	crateInfo.Name = cratename
-	return crateInfo, nil
+	return crateInfo.Crate, nil
 }
 
 func (c *crateApiCaller) Download(cratename, version string) (*bytes.Buffer, error) {
