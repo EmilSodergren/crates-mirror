@@ -95,6 +95,42 @@ func initializeRepo(db *sql.DB, registrypath, indexurl string) error {
 	return err
 }
 
+func loadFileInfo(db *sql.DB, path string, info os.FileInfo, apiCaller *crateApiCaller) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	fmt.Println("Reading file", info.Name())
+	scanner := bufio.NewScanner(f)
+	ci, err := apiCaller.CrateInfo(info.Name())
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec("insert into crate (name, description, documentation) values (?,?,?)", ci.Name, ci.Crate.Description, ci.Crate.Documentation)
+	if err != nil {
+		return err
+	}
+	for scanner.Scan() {
+		var crate CrateVersion
+		err = json.Unmarshal(scanner.Bytes(), &crate)
+		if err != nil {
+			return err
+		}
+		versionInfo, err := apiCaller.CrateVersionInfo(crate)
+		if err != nil {
+			return err
+		}
+		_, err = db.Exec("insert into crate_version (name, version, checksum, yanked, license) values (?,?,?,?,?)", crate.Name, crate.Vers, crate.Cksum, crate.Yanked, versionInfo.Licence)
+		if err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string) error {
 	var count int
 	err := db.QueryRow("select count(id) from crate_version").Scan(&count)
@@ -115,30 +151,8 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 			return nil
 		}
 		if !info.IsDir() {
-			f, err := os.Open(path)
+			err = loadFileInfo(db, path, info, apiCaller)
 			if err != nil {
-				return err
-			}
-			fmt.Println("Reading file", info.Name())
-			scanner := bufio.NewScanner(f)
-			ci, err := apiCaller.CrateInfo(info.Name())
-			if err != nil {
-				return err
-			}
-			_, err = db.Exec("insert into crate (name, description, documentation) values (?,?,?)", ci.Name, ci.Crate.Description, ci.Crate.Documentation)
-			if err != nil {
-				return err
-			}
-			for scanner.Scan() {
-				var crate CrateVersion
-				//req := fmt.Sprintf("%s/%s/%s", dlApi, crate.Name, crate.Vers)
-				json.Unmarshal(scanner.Bytes(), &crate)
-				_, err := db.Exec("insert into crate_version (name, version, checksum, yanked) values (?, ?, ?, ?)", crate.Name, crate.Vers, crate.Cksum, crate.Yanked)
-				if err != nil {
-					return err
-				}
-			}
-			if err := scanner.Err(); err != nil {
 				return err
 			}
 		}
@@ -173,6 +187,34 @@ type Crate struct {
 type CrateInfo struct {
 	Name  string
 	Crate Crate `json:"crate"`
+}
+type CrateVersionInfo struct {
+	Licence string `json:"license"`
+}
+
+func (c *crateApiCaller) CrateVersionInfo(crate CrateVersion) (*CrateVersionInfo, error) {
+	req := fmt.Sprintf("%s/%s/%s", c.ServerApi, crate.Name, crate.Vers)
+	resp, err := http.Get(req)
+	if err != nil {
+		return nil, err
+	}
+	var cvi = new(struct {
+		CrateVersionInfo *CrateVersionInfo `json:"version"`
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", req, resp.Status)
+	}
+	var body = new(bytes.Buffer)
+	_, err = io.Copy(body, resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(body.Bytes(), cvi)
+	if err != nil {
+		return nil, err
+	}
+	return cvi.CrateVersionInfo, nil
 }
 
 func (c *crateApiCaller) CrateInfo(cratename string) (*CrateInfo, error) {
