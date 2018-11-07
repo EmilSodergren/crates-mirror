@@ -22,9 +22,9 @@ import (
 )
 
 const initStmt = `create table crate (
-	name text primary key,
-	description text,
-	documentation text
+    name text primary key,
+    description text,
+    documentation text
 );
 create table crate_version (
     id integer primary key,
@@ -336,6 +336,7 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 		filename := fmt.Sprintf("%s-%s.crate", crate.Name, crate.Vers)
 		directory := createDirectory(crate.Name, cratesdirpath)
 		cratefilepath := filepath.Join(directory, filename)
+		crate.Path = cratefilepath
 		// If the file exist, dont download it again
 		if _, err := os.Stat(cratefilepath); err == nil {
 			f, err := os.Open(cratefilepath)
@@ -350,7 +351,9 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 			hash := sha256.New()
 			hash.Write(content)
 			if fmt.Sprintf("%x", hash.Sum(nil)) == crate.Cksum {
+				crate.Size = int64(len(content))
 				log.Println(filename, "already exist. No need to download.")
+				returnCrate <- crate
 				continue
 			}
 		}
@@ -372,7 +375,6 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 				log.Println(err)
 			}
 			out.Close()
-			crate.Path = cratefilepath
 			returnCrate <- crate
 		} else {
 			log.Printf("Hash mismatch for crate %s-%s. Got %s, Expected %s\n", crate.Name, crate.Vers, fmt.Sprintf("%x", hash.Sum(nil)), crate.Cksum)
@@ -412,7 +414,6 @@ func retrieveCrates(db *sql.DB, cratespath string, caller *crateApiCaller) error
 	// Collect the information and put it in to the database
 	go func() {
 		for crate := range returnCrate {
-			fmt.Println(crate)
 			_, err := db.Exec(updateStmt, 1, crate.Size, time.Now(), crate.Path, crate.Name, crate.Vers)
 			if err != nil {
 				log.Println(err)
