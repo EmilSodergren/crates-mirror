@@ -33,8 +33,9 @@ create table crate_version (
     size integer default 0,
     checksum text,
     yanked integer default 0,
+    path text,
     downloaded integer default 0,
-	license text,
+    license text,
     last_update text
 );
 
@@ -50,6 +51,7 @@ type CrateVersion struct {
 	Size    int64
 	License string
 	Yanked  bool `json:"yanked"`
+	Path    string
 }
 
 func initialize_db(dbpath string) (*sql.DB, error) {
@@ -87,7 +89,7 @@ func initializeRepo(db *sql.DB, registrypath, indexurl string) error {
 		return err
 	}
 	log.Println("Pulling in", registrypath)
-	output, err := exec.Command("git", "pull", "--rebase=false", "--ff-only").Output()
+	output, err := exec.Command("git", "pull", "--rebase=true").Output()
 	if err != nil {
 		return err
 	}
@@ -105,9 +107,9 @@ type FileInfos struct {
 
 func loadFileInfo(db *sql.DB, fileinfoChan <-chan FileInfos, dbChan chan<- string, doneChan chan<- struct{}, apiCaller *crateApiCaller) {
 	defer func() { doneChan <- struct{}{} }()
-	for path := range fileinfoChan {
-		if !path.CrateEntryExist {
-			crate, err := apiCaller.CrateInfo(filepath.Base(path.Path))
+	for fileInfo := range fileinfoChan {
+		if !fileInfo.CrateEntryExist {
+			crate, err := apiCaller.CrateInfo(filepath.Base(fileInfo.Path))
 			if err != nil {
 				log.Println(err)
 				continue
@@ -115,7 +117,7 @@ func loadFileInfo(db *sql.DB, fileinfoChan <-chan FileInfos, dbChan chan<- strin
 			desc := strings.Replace(crate.Description, "'", "''", -1)
 			dbChan <- fmt.Sprintf("insert into crate (name, description, documentation) values ('%s','%s','%s')", crate.Name, desc, crate.Documentation)
 		}
-		f, err := os.Open(path.Path)
+		f, err := os.Open(fileInfo.Path)
 		if err != nil {
 			log.Println(err)
 			continue
@@ -128,7 +130,7 @@ func loadFileInfo(db *sql.DB, fileinfoChan <-chan FileInfos, dbChan chan<- strin
 				log.Println(err)
 				break
 			}
-			if _, found := path.Versions[crate.Vers]; found {
+			if _, found := fileInfo.Versions[crate.Vers]; found {
 				// Already inserted, continue to next
 				continue
 			}
@@ -137,8 +139,6 @@ func loadFileInfo(db *sql.DB, fileinfoChan <-chan FileInfos, dbChan chan<- strin
 				log.Println(err)
 				break
 			}
-			fmt.Println("CRATE:", crate)
-			fmt.Println("VersionInfo:", versionInfo)
 			crate.License = versionInfo.Licence
 			dbChan <- fmt.Sprintf("insert into crate_version (name, version, checksum, yanked, license) values ('%s','%s','%s',%t,'%s')", crate.Name, crate.Vers, crate.Cksum, crate.Yanked, crate.License)
 		}
@@ -372,10 +372,11 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 				log.Println(err)
 			}
 			out.Close()
+			crate.Path = cratefilepath
 			returnCrate <- crate
 		} else {
 			log.Printf("Hash mismatch for crate %s-%s. Got %s, Expected %s\n", crate.Name, crate.Vers, fmt.Sprintf("%x", hash.Sum(nil)), crate.Cksum)
-			log.Println("The response was", string(responseData.Bytes()))
+			log.Println("The response was", string(responseData.Bytes()[:100]), "...")
 		}
 	}
 }
@@ -397,7 +398,7 @@ func readApi(registrypath string) (*crateApiCaller, error) {
 	return indexApi, nil
 }
 
-var updateStmt = "update crate_version set downloaded = ?, size = ?,  last_update = ? where name = ? and version = ?"
+var updateStmt = "update crate_version set downloaded = ?, size = ?, last_update = ?, path = ? where name = ? and version = ?"
 
 func retrieveCrates(db *sql.DB, cratespath string, caller *crateApiCaller) error {
 	var crateChan = make(chan CrateVersion)
@@ -411,7 +412,8 @@ func retrieveCrates(db *sql.DB, cratespath string, caller *crateApiCaller) error
 	// Collect the information and put it in to the database
 	go func() {
 		for crate := range returnCrate {
-			_, err := db.Exec(updateStmt, 1, crate.Size, time.Now(), crate.Name, crate.Vers)
+			fmt.Println(crate)
+			_, err := db.Exec(updateStmt, 1, crate.Size, time.Now(), crate.Path, crate.Name, crate.Vers)
 			if err != nil {
 				log.Println(err)
 			}
