@@ -127,8 +127,7 @@ func loadFileInfo(db *sql.DB, fileinfoChan <-chan FileInfos, dbChan chan<- strin
 			var crate CrateVersion
 			err = json.Unmarshal(scanner.Bytes(), &crate)
 			if err != nil {
-				log.Println(err)
-				break
+				log.Panicln(err)
 			}
 			if _, found := fileInfo.Versions[crate.Vers]; found {
 				// Already inserted, continue to next
@@ -143,7 +142,7 @@ func loadFileInfo(db *sql.DB, fileinfoChan <-chan FileInfos, dbChan chan<- strin
 			dbChan <- fmt.Sprintf("insert into crate_version (name, version, checksum, yanked, license) values ('%s','%s','%s',%t,'%s')", crate.Name, crate.Vers, crate.Cksum, crate.Yanked, crate.License)
 		}
 		if err := scanner.Err(); err != nil {
-			log.Println(err)
+			log.Panicln(err)
 		}
 		f.Close()
 	}
@@ -191,7 +190,7 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 			var crate CrateVersion
 			err = json.Unmarshal(scanner.Bytes(), &crate)
 			if err != nil {
-				log.Println(err)
+				log.Panicln(err)
 				return err
 			}
 			f.Close()
@@ -330,6 +329,7 @@ func (c *crateApiCaller) Download(cratename, version string) (*bytes.Buffer, err
 	}
 	return responseData, nil
 }
+
 func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersion, doneChan chan<- struct{}, cratesdirpath string, caller *crateApiCaller) {
 	defer func() { doneChan <- struct{}{} }()
 	for crate := range crateChan {
@@ -341,12 +341,12 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 		if _, err := os.Stat(cratefilepath); err == nil {
 			f, err := os.Open(cratefilepath)
 			if err != nil {
-				log.Println(err)
+				log.Panicln(err)
 			}
 			content, err := ioutil.ReadAll(f)
 			f.Close()
 			if err != nil {
-				log.Println(err)
+				log.Panicln(err)
 			}
 			hash := sha256.New()
 			hash.Write(content)
@@ -367,12 +367,12 @@ func downloadCrate(crateChan <-chan CrateVersion, returnCrate chan<- CrateVersio
 		if fmt.Sprintf("%x", hash.Sum(nil)) == crate.Cksum {
 			out, err := os.Create(cratefilepath)
 			if err != nil {
-				log.Println(err)
+				log.Panicln(err)
 			}
 			fmt.Println("Downloaded", filename)
 			crate.Size, err = io.Copy(out, responseData)
 			if err != nil {
-				log.Println(err)
+				log.Panicln(err)
 			}
 			out.Close()
 			returnCrate <- crate
