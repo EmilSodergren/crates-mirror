@@ -137,6 +137,8 @@ func loadFileInfo(db *sql.DB, fileinfoChan <-chan FileInfos, dbChan chan<- strin
 				log.Println(err)
 				break
 			}
+			fmt.Println("CRATE:", crate)
+			fmt.Println("VersionInfo:", versionInfo)
 			crate.License = versionInfo.Licence
 			dbChan <- fmt.Sprintf("insert into crate_version (name, version, checksum, yanked, license) values ('%s','%s','%s',%t,'%s')", crate.Name, crate.Vers, crate.Cksum, crate.Yanked, crate.License)
 		}
@@ -179,7 +181,23 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 			return nil
 		}
 		if !info.IsDir() {
-			rows, err := db.Query("select version from crate_version where name=?", info.Name())
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			// Read the first line to extract crateName
+			scanner := bufio.NewScanner(f)
+			scanner.Scan()
+			var crate CrateVersion
+			err = json.Unmarshal(scanner.Bytes(), &crate)
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+			f.Close()
+
+			crateName := crate.Name
+			rows, err := db.Query("select version from crate_version where name=?", crateName)
 			if err != nil {
 				return err
 			}
@@ -191,7 +209,7 @@ func loadInfo(db *sql.DB, apiCaller *crateApiCaller, registrypath, ignore string
 			}
 			rows.Close()
 			var count int
-			err = db.QueryRow("select count(*) from crate where name=?", info.Name()).Scan(&count)
+			err = db.QueryRow("select count(*) from crate where name=?", crateName).Scan(&count)
 			if err != nil {
 				return err
 			}
@@ -245,27 +263,27 @@ type CrateVersionInfo struct {
 	Licence string `json:"license"`
 }
 
-func (c *crateApiCaller) CrateVersionInfo(crate CrateVersion) (*CrateVersionInfo, error) {
+func (c *crateApiCaller) CrateVersionInfo(crate CrateVersion) (CrateVersionInfo, error) {
 	req := fmt.Sprintf("%s/%s/%s", c.ServerApi, crate.Name, crate.Vers)
 	resp, err := http.Get(req)
+	var cvi = struct {
+		CrateVersionInfo CrateVersionInfo `json:"version"`
+	}{}
 	if err != nil {
-		return nil, err
+		return cvi.CrateVersionInfo, err
 	}
 	defer resp.Body.Close()
-	var cvi = new(struct {
-		CrateVersionInfo *CrateVersionInfo `json:"version"`
-	})
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: %s", req, resp.Status)
+		return cvi.CrateVersionInfo, fmt.Errorf("%s: %s", req, resp.Status)
 	}
 	var body = new(bytes.Buffer)
 	_, err = io.Copy(body, resp.Body)
 	if err != nil {
-		return nil, err
+		return cvi.CrateVersionInfo, err
 	}
-	err = json.Unmarshal(body.Bytes(), cvi)
+	err = json.Unmarshal(body.Bytes(), &cvi)
 	if err != nil {
-		return nil, err
+		return cvi.CrateVersionInfo, err
 	}
 	return cvi.CrateVersionInfo, nil
 }
