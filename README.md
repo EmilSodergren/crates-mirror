@@ -9,11 +9,11 @@ dependency download faster when building Rust project.
 This fork adds more implementations of the crates-mirror
 ## Requirements
 * Good bandwidth (at least can access aws-s3 service of us region)
-* Large hard disk (at least 30G, the current size is 17G, 2018-11-02.)
+* Large hard disk (at least 30G, the current size is 18G, 2018-11-15.)
 ## Go
 
 ### How
-1. Clone this repo: `git clone https://github.com/tennix/crates-mirror`
+1. Clone this repo: `git clone https://github.com/EmilSodergren/crates-mirror.git`
 2. go get `github.com/mattn/go-sqlite3`
 3. `go install` 
 4. Add a config.json file in your current directory, or place it wherever and pass the path as an argument.
